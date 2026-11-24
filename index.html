@@ -59,7 +59,7 @@
   <summary>Tuning</summary>
   <label>Contact offset: <span id="offV">0</span> ms (+ = treat swing as later)</label>
   <input id="off" type="range" min="-150" max="150" step="5" value="0">
-  <label>Level tilt (beta°): <span id="lvlV">0</span> — launch angle = (tilt − level) × 0.8</label>
+  <label>Level tilt (beta°): <span id="lvlV">0</span> — small tweak; launch angle comes mostly from pitch height (low = lift)</label>
   <input id="lvl" type="range" min="-60" max="60" step="1" value="0">
   <label>Sensor rate: <span id="hz">–</span> Hz</label>
 </details>
@@ -79,10 +79,10 @@
 
   // ---------- pitch types ----------
   const PITCHES = [
-    { name:'Fastball',  ms:1000, mph:[88,95], bx:0,   w:4 },
-    { name:'Changeup',  ms:1350, mph:[77,82], bx:0,   w:2 },
-    { name:'Slider',    ms:1150, mph:[80,86], bx:60,  w:2 },
-    { name:'Curveball', ms:1500, mph:[72,78], bx:-70, w:2 },
+    { name:'Fastball',  ms:900,  mph:[92,99], bx:0,   w:4 },
+    { name:'Changeup',  ms:1250, mph:[79,84], bx:0,   w:2 },
+    { name:'Slider',    ms:1050, mph:[82,88], bx:60,  w:2 },
+    { name:'Curveball', ms:1400, mph:[73,79], bx:-70, w:2 },
   ];
   function pickPitch() {
     let r = rand(0, PITCHES.reduce((a,p)=>a+p.w,0));
@@ -193,7 +193,7 @@
     const d = Math.round(sw.peakT + S.off - p.at);         // ms; negative = early
     const chase = p.strike ? 0 : clamp((Math.max(Math.abs(p.loc.x), Math.abs(p.loc.y)) - 1) / 0.6, 0, 1);
     const ad = Math.abs(d);
-    let q = ad <= 35 ? 1 : ad <= 70 ? 0.8 : ad <= 120 ? 0.55 : ad <= 180 ? 0.3 : 0;
+    let q = ad <= 30 ? 1 : ad <= 60 ? 0.8 : ad <= 95 ? 0.55 : ad <= 130 ? 0.3 : 0;
     q *= (1 - 0.45*chase);
 
     // bat speed 0..1.2 from spin + accel
@@ -201,7 +201,7 @@
     const bat = 0.6*sp + 0.4*ac;
 
     const dbg = `timing ${d>0?'+':''}${d} ms · bat ${bat.toFixed(2)} · tilt ${Math.round(sw.beta)}°`;
-    if (ad > 180 || (chase > 0.5 && Math.random() < 0.5)) {
+    if (ad > 130 || (chase > 0.4 && Math.random() < 0.6)) {
       setMsg(d < 0 ? 'Swing and a miss (early)' : 'Swing and a miss (late)', '#ffb340');
       $('dbg').textContent = dbg;
       addStrike(false); finishPitch(); return;
@@ -211,13 +211,13 @@
       addStrike(true); finishPitch(); return;
     }
 
-    const ev = Math.round((40 + 62*bat) * (0.55 + 0.45*q) + (p.mph - 80) * 0.15);
-    const la = clamp((sw.beta - S.lvl) * 0.8 + rand(-5,5), -25, 75);
+    const ev = Math.round((48 + 66*bat) * (0.6 + 0.4*q) + (p.mph - 80) * 0.2);
+    const la = clamp(14 + p.loc.y * 12 + (sw.beta - S.lvl) * 0.3 + rand(-6,6), -20, 70);   // low pitch (y>0) = lifted
     const spray = clamp(d * 0.35 + rand(-7,7), -70, 70);   // negative = pull side (left, righty)
     const out = classifyHit(ev, la, spray, p);
     G.bestEV = Math.max(G.bestEV, ev);
     $('dbg').textContent = `${dbg} · exit ${ev} mph · launch ${Math.round(la)}° · spray ${Math.round(spray)}° · ${out.dist} ft`;
-    drawField(spray, out.dist, out.kind);
+    drawField(spray, out.dist, out.kind, la);
 
     if (out.kind === 'foul') { setMsg('Foul ball', '#ffb340'); addStrike(true); }
     else if (out.kind === 'out') { setMsg(out.text, '#ff6b6b'); outCase(out); }
@@ -400,7 +400,7 @@
       const fx = ms => bx + bw * clamp(ms / total, 0, 1);
       const c = pitch.type.ms - S.off;                       // window centre (ms after release)
       vx.fillStyle = '#10161c'; vx.fillRect(bx, by, bw, bh);
-      [[120,'#5a4a1e'],[70,'#8a6d1c'],[35,'#3ddc84']].forEach(([hw,col]) => {
+      [[130,'#3a3118'],[95,'#5a4a1e'],[60,'#8a6d1c'],[30,'#3ddc84']].forEach(([hw,col]) => {
         vx.fillStyle = col; vx.fillRect(fx(c-hw), by, fx(c+hw)-fx(c-hw), bh);
       });
       const cur = fx(now - pitch.t0);
@@ -422,7 +422,14 @@
   }
 
   const fc = $('field'), fx = fc.getContext('2d');
-  function drawField(spray, dist, kind) {
+  let ball = null;                                  // {t0,dur,spray,dist,kind,la}
+  const FENCE = a => 375 - 55*Math.abs(a)/45;
+  function drawField(spray, dist, kind, la) {
+    ball = (spray === null || spray === undefined) ? null
+         : { t0: performance.now(), spray, dist, kind, la: la || 0,
+             dur: clamp(600 + Math.min(dist,450)*2.2, 800, 1700) };
+  }
+  function fieldLoop() {
     const W = fc.width, H = fc.height, hx = W/2, hy = H - 14, sc = (H - 30) / 420;
     fx.clearRect(0,0,W,H);
     fx.strokeStyle = '#33404c'; fx.lineWidth = 2;
@@ -430,20 +437,38 @@
     fx.moveTo(hx, hy); fx.lineTo(hx + Math.sin(Math.PI/4)*420*sc, hy - Math.cos(Math.PI/4)*420*sc); fx.stroke();
     fx.strokeStyle = '#4a5a6a'; fx.beginPath();
     for (let a = -45; a <= 45; a += 3) {
-      const r = (375 - 55*Math.abs(a)/45) * sc, rad = a*Math.PI/180;
+      const r = FENCE(a) * sc, rad = a*Math.PI/180;
       const x = hx + Math.sin(rad)*r, y = hy - Math.cos(rad)*r;
       a === -45 ? fx.moveTo(x,y) : fx.lineTo(x,y);
     }
     fx.stroke();
-    if (spray === null || spray === undefined) return;
-    const rad = spray*Math.PI/180, r = Math.min(dist, 460)*sc;
-    fx.fillStyle = kind === 'hit' ? '#3ddc84' : kind === 'foul' ? '#ffb340' : '#ff6b6b';
-    fx.beginPath(); fx.arc(hx + Math.sin(rad)*r, hy - Math.cos(rad)*r, 7, 0, 7); fx.fill();
+    if (ball) {
+      const f = clamp((performance.now() - ball.t0) / ball.dur, 0, 1);
+      const rad = ball.spray*Math.PI/180, total = Math.min(ball.dist, 470) * sc;
+      const col = ball.kind === 'hit' ? '#3ddc84' : ball.kind === 'foul' ? '#ffb340' : '#ff6b6b';
+      // ground position advances ~linearly; height is an arc (grounders skip along the dirt)
+      const d = total * (ball.la < 10 ? f : 1 - Math.pow(1 - f, 1.4));
+      const gx = hx + Math.sin(rad)*d, gy = hy - Math.cos(rad)*d;
+      const apex = ball.la < 10 ? 0 : clamp(ball.la / 70, 0.15, 1) * 110;
+      const h = ball.la < 10 ? Math.abs(Math.sin(f*Math.PI*3)) * 7 * (1 - f) : Math.sin(f*Math.PI) * apex;
+      if (f < 1) {
+        fx.fillStyle = 'rgba(0,0,0,0.45)'; fx.beginPath(); fx.ellipse(gx, gy, 6, 3, 0, 0, 7); fx.fill();   // shadow
+        fx.fillStyle = '#f4f4f4'; fx.beginPath(); fx.arc(gx, gy - h, 6 + h/40, 0, 7); fx.fill();
+      } else {
+        fx.fillStyle = col; fx.beginPath(); fx.arc(gx, gy, 7, 0, 7); fx.fill();
+        if (ball.kind === 'hit' && ball.dist >= FENCE(ball.spray) && Math.abs(ball.spray) <= 45 && ball.la >= 15) {
+          const pulse = (performance.now() - ball.t0 - ball.dur) / 600;
+          if (pulse < 1) { fx.strokeStyle = `rgba(61,220,132,${1 - pulse})`; fx.lineWidth = 3;
+            fx.beginPath(); fx.arc(gx, gy, 10 + pulse*30, 0, 7); fx.stroke(); }
+        }
+      }
+    }
+    requestAnimationFrame(fieldLoop);
   }
 
   setInterval(() => { $('hz').textContent = rateEMA ? Math.round(rateEMA) : '–'; }, 500);
 
-  render(); drawField(null); drawView();
+  render(); drawField(null); drawView(); fieldLoop();
   if (G.over) { setMsg('Last game finished'); setSub(`${G.runs} runs. Tap a start button for a new game.`); }
   else if (G.inning > 1 || G.outs || G.runs) setSub('Game in progress — tap a start button to continue.');
   window.__bb = { G: () => G, S: () => S, phase: () => phase, pitch: () => pitch, resolveSwing, classifyHit };   // handy for testing
