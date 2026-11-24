@@ -46,6 +46,7 @@
 <div id="startBtns">
   <button id="startPhone">Start — phone swing (enables motion)</button>
   <button id="startDesk" class="alt">Start — desktop (click / Space to swing)</button>
+  <button id="startClaude" class="alt">Start — Claude pitching (phone swing)</button>
 </div>
 <div class="row">
   <button id="pauseBtn" class="alt" style="display:none">Pause</button>
@@ -54,6 +55,14 @@
 
 <canvas id="field" width="640" height="300" style="margin-top:8px"></canvas>
 <div id="dbg"></div>
+
+<details id="linkBox">
+  <summary>Claude link <span id="linkSt"></span></summary>
+  <label>GitHub token (classic, gist scope) — paste once, stored on this device only</label>
+  <input id="tok" type="password" autocomplete="off" placeholder="ghp_…" style="width:100%;padding:10px;border-radius:10px;border:0;background:#1a2027;color:#e8edf2;font-size:16px">
+  <button id="tokSave" class="alt">Save &amp; test link</button>
+  <button id="tokClear" class="alt">Forget token</button>
+</details>
 
 <details>
   <summary>Tuning</summary>
@@ -102,7 +111,10 @@
   const later = (fn, ms) => { const id = setTimeout(fn, ms); timers.push(id); return id; };
   const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
 
-  function setMsg(t, color) { $('msg').textContent = t; $('msg').style.color = color || '#e8edf2'; }
+  // Claude mode: pitches requested through a secret gist (see "Claude link" section below)
+  let claudeMode = false, awaiting = false, pendingSpec = null, evts = [], lastSwing = null;
+
+  function setMsg(t, color) { $('msg').textContent = t; $('msg').style.color = color || '#e8edf2'; if (t) evts.push(t); }
   function setSub(t) { $('sub').textContent = t; }
 
   function render() {
@@ -126,16 +138,29 @@
     }
     later(() => {
       if (paused) { phase = 'idle'; return; }
-      phase = 'windup'; setMsg('Get ready…'); setSub('');
-      if (navigator.vibrate) navigator.vibrate(15);
-      later(throwPitch, WINDUP_MS);
+      if (claudeMode) { awaiting = true; setMsg(''); setSub('Waiting for Claude’s pitch…'); tryRequested(); return; }
+      startWindup(null);
     }, gap);
   }
 
-  function throwPitch() {
-    const type = pickPitch(), loc = pickLocation();
+  function startWindup(spec) {
+    awaiting = false;
+    phase = 'windup'; setMsg('Get ready…'); setSub('');
+    if (navigator.vibrate) navigator.vibrate(15);
+    later(() => throwPitch(spec), WINDUP_MS);
+  }
+  function tryRequested() {
+    if (claudeMode && awaiting && !paused && pendingSpec) { const s = pendingSpec; pendingSpec = null; startWindup(s); }
+  }
+
+  function throwPitch(spec) {
+    spec = spec || {};
+    const type = PITCHES.find(p => p.name.toLowerCase() === String(spec.type || '').toLowerCase()) || pickPitch();
+    const loc = (isFinite(spec.x) && isFinite(spec.y)) ? { x:clamp(+spec.x, -1.8, 1.8), y:clamp(+spec.y, -1.8, 1.8) } : pickLocation();
     const now = performance.now();
-    pitch = { type, loc, strike:inZone(loc), t0:now, at:now + type.ms, mph:Math.round(rand(type.mph[0], type.mph[1])), resolved:false };
+    const mph = isFinite(spec.mph) ? clamp(Math.round(+spec.mph), 60, 105) : Math.round(rand(type.mph[0], type.mph[1]));
+    pitch = { type, loc, strike:inZone(loc), t0:now, at:now + type.ms, mph, resolved:false, reqId:spec.id || 0, spec };
+    evts = []; lastSwing = null;
     phase = 'flight'; setMsg('');
     setSub(`${type.name} ${pitch.mph} mph`);
     // if no swing is in progress shortly after arrival, it's a take
@@ -184,6 +209,7 @@
   function finishPitch() {
     save(); render();
     pitch.resolved = true;
+    if (claudeMode && pitch.reqId) reportResult();
     phase = 'result';
     scheduleNextPitch(GAP_MS);
   }
@@ -211,6 +237,7 @@
     const bat = 0.6*sp + 0.4*ac;
 
     const dbg = `timing ${d>0?'+':''}${d} ms · bat ${bat.toFixed(2)} · tilt ${Math.round(sw.beta)}°`;
+    lastSwing = { timing:d, bat:+bat.toFixed(2) };
     if (ad > 130 || (chase > 0.4 && Math.random() < 0.6)) {
       setMsg(d < 0 ? 'Swing and a miss (early)' : 'Swing and a miss (late)', '#ffb340');
       $('dbg').textContent = dbg;
@@ -226,6 +253,7 @@
     const spray = clamp(d * 0.35 + rand(-7,7), -70, 70);   // negative = pull side (left, righty)
     const out = classifyHit(ev, la, spray, p);
     G.bestEV = Math.max(G.bestEV, ev);
+    Object.assign(lastSwing, { ev, la:Math.round(la), spray:Math.round(spray), dist:out.dist });
     $('dbg').textContent = `${dbg} · exit ${ev} mph · launch ${Math.round(la)}° · spray ${Math.round(spray)}° · ${out.dist} ft`;
     drawField(spray, out.dist, out.kind, la);
 
@@ -324,7 +352,9 @@
 
   // ---------- start / pause / new ----------
   async function begin(mode) {
-    if (mode === 'phone') {
+    if (mode === 'claude' && !TOKEN) { setSub('Open “Claude link” below and paste your token first.'); $('linkBox').open = true; return; }
+    claudeMode = (mode === 'claude');
+    if (mode === 'phone' || mode === 'claude') {
       try {
         if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
           const p = await DeviceMotionEvent.requestPermission();
@@ -345,18 +375,20 @@
     if (G.over) G = newGame();
     render(); setMsg('Play ball!');
     clearTimers(); scheduleNextPitch(1200);
+    if (claudeMode) startPolling(); else stopPolling();
   }
 
   $('startPhone').onclick = () => begin('phone');
+  $('startClaude').onclick = () => begin('claude');
   $('startDesk').onclick = () => begin('desk');
   $('pauseBtn').onclick = () => {
     paused = !paused;
     $('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
-    if (paused) { clearTimers(); setMsg('Paused'); phase = 'idle'; pitch = null; }
+    if (paused) { requeueUnresolved(); clearTimers(); setMsg('Paused'); phase = 'idle'; pitch = null; awaiting = false; }
     else { setMsg(''); scheduleNextPitch(800); }
   };
   $('newBtn').onclick = () => {
-    clearTimers(); paused = false; pitch = null; G = newGame(); save(); render();
+    requeueUnresolved(); clearTimers(); paused = false; pitch = null; awaiting = false; G = newGame(); save(); render();
     $('pauseBtn').textContent = 'Pause'; $('dbg').textContent = ''; drawField(null);
     if (sensorsOn || deskMode) { $('pauseBtn').style.display = 'block'; setMsg('Play ball!'); scheduleNextPitch(1200); }
     else { setMsg(''); setSub('Tap a start button to begin.'); }
@@ -366,6 +398,79 @@
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState === 'visible' && sensorsOn && navigator.wakeLock) { try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {} }
   });
+
+  // ---------- Claude link (secret gist as a message bus) ----------
+  // request.json  <- desktop MCP writes {id, type, x, y, mph}   (id = increasing number)
+  // result.json   <- this page writes {id, ...result}           (id = the request it answers)
+  const GIST_ID = '0e74fa52811bb637e3f7b03e423fce90', API = 'https://api.github.com/gists/' + GIST_ID;
+  let TOKEN = ''; try { TOKEN = localStorage.getItem('bbToken') || ''; } catch(e) {}
+  let pollTimer = null, etag = null, lastResultId = 0, polling = false;
+  const linkSt = t => { $('linkSt').textContent = t ? '· ' + t : ''; };
+  const hdrs = extra => Object.assign({ Authorization:'Bearer ' + TOKEN, Accept:'application/vnd.github+json' }, extra || {});
+  linkSt(TOKEN ? 'token saved' : 'no token');
+
+  async function pollOnce() {
+    if (polling || !TOKEN || document.visibilityState !== 'visible') return;
+    polling = true;
+    try {
+      const r = await fetch(API, { headers: hdrs(etag ? { 'If-None-Match': etag } : {}) });
+      if (r.status === 304) { linkSt('connected'); return; }
+      if (!r.ok) { linkSt('error ' + r.status); return; }
+      etag = r.headers.get('ETag');
+      const j = await r.json(), f = j.files || {};
+      const req = JSON.parse((f['request.json'] || {}).content || '{}');
+      const res = JSON.parse((f['result.json'] || {}).content || '{}');
+      lastResultId = Math.max(lastResultId, res.id || 0);
+      linkSt('connected');
+      const seen = Math.max(S.lastReq || 0, lastResultId, pendingSpec ? pendingSpec.id : 0, pitch && pitch.reqId || 0);
+      if (req.id && req.id > seen) { pendingSpec = req; S.lastReq = req.id; save(); tryRequested(); }
+    } catch (e) { linkSt('offline'); }
+    finally { polling = false; }
+  }
+  function startPolling() { stopPolling(); etag = null; pollOnce().then(postStatus); pollTimer = setInterval(pollOnce, 2000); }
+  // a pitch that was thrown but never resolved (pause / new game) goes back in the queue
+  function requeueUnresolved() { if (claudeMode && pitch && pitch.reqId && !pitch.resolved) pendingSpec = pitch.spec; }
+  function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && claudeMode) { etag = null; pollOnce(); } });
+
+  function stateSnap() {
+    return { inning:Math.min(G.inning, INNINGS), innings:INNINGS, outs:G.outs, balls:G.balls, strikes:G.strikes,
+             runs:G.runs, bases:G.bases.slice(), over:G.over, hits:G.hits, hr:G.hr };
+  }
+  async function writeResult(obj) {
+    for (let i = 0; i < 3; i++) {
+      try {
+        const r = await fetch(API, { method:'PATCH', headers: hdrs({ 'Content-Type':'application/json' }),
+          body: JSON.stringify({ files: { 'result.json': { content: JSON.stringify(obj) } } }) });
+        if (r.ok) { etag = null; return true; }
+      } catch (e) {}
+      await new Promise(r => setTimeout(r, 700 * (i + 1)));
+    }
+    linkSt('write failed'); return false;
+  }
+  function postStatus() { writeResult({ id: lastResultId, ready:true, ts:Date.now(), state:stateSnap() }); }
+  function reportResult() {
+    const p = pitch, loc = p.loc;
+    const res = {
+      id: p.reqId, ts: Date.now(),
+      pitch: { type:p.type.name, mph:p.mph, x:+loc.x.toFixed(2), y:+loc.y.toFixed(2), strike:p.strike },
+      swung: !!lastSwing, swing: lastSwing || null,
+      events: evts.filter(Boolean).slice(), state: stateSnap(),
+    };
+    lastResultId = Math.max(lastResultId, p.reqId);
+    writeResult(res);
+  }
+
+  $('tokSave').onclick = async () => {
+    const t = $('tok').value.trim(); if (!t) return;
+    TOKEN = t; try { localStorage.setItem('bbToken', t); } catch(e) {}
+    $('tok').value = ''; etag = null; linkSt('testing…');
+    try {
+      const r = await fetch(API, { headers: hdrs() });
+      linkSt(r.ok ? 'connected' : r.status === 401 ? 'bad token' : 'error ' + r.status);
+    } catch (e) { linkSt('offline'); }
+  };
+  $('tokClear').onclick = () => { TOKEN = ''; try { localStorage.removeItem('bbToken'); } catch(e) {} stopPolling(); linkSt('no token'); };
 
   // ---------- tuning ----------
   $('off').value = S.off; $('offV').textContent = S.off;
