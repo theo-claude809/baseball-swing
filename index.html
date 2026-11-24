@@ -389,6 +389,23 @@
       const r = 5 + 24*Math.pow(q, 2.2);
       vx.fillStyle = '#f4f4f4'; vx.beginPath(); vx.arc(x, y, r, 0, 7); vx.fill();
       vx.strokeStyle = '#d33'; vx.lineWidth = 1.5; vx.beginPath(); vx.arc(x, y, r*0.7, 0.4, 1.9); vx.stroke();
+
+      // shrinking ring: closes onto the strike zone at arrival
+      const sc = 1 + 1.3*(1 - lin);
+      vx.strokeStyle = `rgba(255,210,74,${0.25 + 0.6*lin})`; vx.lineWidth = 3;
+      vx.strokeRect(cx - zw*sc/2, cy - zh*sc/2, zw*sc, zh*sc);
+
+      // timing bar: cursor sweeps right; coloured windows = where a swing PEAK scores
+      const bx = 40, bw = W - 80, by = H - 30, bh = 16, total = pitch.type.ms + 250;
+      const fx = ms => bx + bw * clamp(ms / total, 0, 1);
+      const c = pitch.type.ms - S.off;                       // window centre (ms after release)
+      vx.fillStyle = '#10161c'; vx.fillRect(bx, by, bw, bh);
+      [[120,'#5a4a1e'],[70,'#8a6d1c'],[35,'#3ddc84']].forEach(([hw,col]) => {
+        vx.fillStyle = col; vx.fillRect(fx(c-hw), by, fx(c+hw)-fx(c-hw), bh);
+      });
+      const cur = fx(now - pitch.t0);
+      vx.fillStyle = '#fff'; vx.fillRect(cur - 2, by - 5, 4, bh + 10);
+      vx.strokeStyle = '#33404c'; vx.lineWidth = 1; vx.strokeRect(bx, by, bw, bh);
     }
     requestAnimationFrame(drawView);
   }
