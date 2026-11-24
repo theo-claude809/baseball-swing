@@ -72,7 +72,7 @@
   const INNINGS = 3, GAP_MS = 2000, WINDUP_MS = 800;
 
   // ---------- persistence ----------
-  const newGame = () => ({ inning:1, outs:0, balls:0, strikes:0, runs:0, hits:0, hr:0, bases:[0,0,0], over:false, ab:0, bestEV:0 });
+  const newGame = () => ({ inning:1, outs:0, balls:0, strikes:0, runs:0, hits:0, hr:0, bases:[0,0,0], over:false, ab:0, bestEV:0, innStart:0 });
   let G = newGame(), S = { off:0, lvl:0, best:0 };
   try { const s = JSON.parse(localStorage.getItem('bbState')||'null'); if (s) { G = s.G||G; S = Object.assign(S, s.S||{}); } } catch(e) {}
   const save = () => { try { localStorage.setItem('bbState', JSON.stringify({G,S})); } catch(e) {} };
@@ -98,7 +98,7 @@
 
   // ---------- game flow ----------
   let phase = 'idle';                  // idle | wait | windup | flight | result | over
-  let pitch = null, timers = [], paused = false, sensorsOn = false, deskMode = false;
+  let pitch = null, timers = [], paused = false, sensorsOn = false, deskMode = false, splash = null;
   const later = (fn, ms) => { const id = setTimeout(fn, ms); timers.push(id); return id; };
   const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
 
@@ -114,8 +114,16 @@
   }
 
   function scheduleNextPitch(gap) {
-    if (G.over) { endGame(); return; }
+    if (G.over) { splash = null; endGame(); return; }
     phase = 'wait';
+    if (splash) {                       // "next inning" splash after the result has had a moment to read
+      const s = splash; splash = null;
+      later(() => {
+        setMsg(`End of inning ${s.n}`, '#8bb8ff');
+        setSub(`${s.runs} run${s.runs === 1 ? '' : 's'} this inning · up next: inning ${s.n + 1}/${INNINGS}`);
+      }, 1200);
+      gap = Math.max(gap, 3400);
+    }
     later(() => {
       if (paused) { phase = 'idle'; return; }
       phase = 'windup'; setMsg('Get ready…'); setSub('');
@@ -160,6 +168,8 @@
   function addOut() {
     G.outs++; resetCount();
     if (G.outs >= 3) {
+      splash = { n: G.inning, runs: G.runs - (G.innStart || 0) };
+      G.innStart = G.runs;
       G.outs = 0; G.bases = [0,0,0]; G.inning++;
       if (G.inning > INNINGS) G.over = true;
     }
