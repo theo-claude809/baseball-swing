@@ -4,180 +4,432 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Swing Test</title>
+<title>Swing Baseball</title>
 <style>
   :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: -apple-system, system-ui, sans-serif; background:#101418; color:#e8edf2;
-         padding: max(12px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom)); }
-  h1 { font-size:18px; margin:0 0 8px; }
-  button { font-size:17px; padding:12px 16px; border-radius:12px; border:0; background:#2d7ff9; color:#fff; width:100%; margin:6px 0; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:#101418; color:#e8edf2;
+         padding:max(10px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom)); user-select:none; }
+  button { font-size:16px; padding:11px 14px; border-radius:12px; border:0; background:#2d7ff9; color:#fff; width:100%; margin:5px 0; }
   button.alt { background:#2a323b; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
-  .card { background:#1a2027; border-radius:12px; padding:10px; }
-  .card b { display:block; font-size:22px; font-variant-numeric: tabular-nums; }
-  .card span { font-size:12px; color:#8b97a4; }
-  canvas { width:100%; height:110px; background:#1a2027; border-radius:12px; display:block; }
-  #bar { height:14px; background:#1a2027; border-radius:7px; position:relative; margin:8px 0; overflow:hidden; }
-  #fill { position:absolute; left:0; top:0; bottom:0; width:0; background:#3ddc84; }
-  #mark { position:absolute; right:0; top:0; bottom:0; width:4px; background:#fff; }
-  #result { font-size:26px; font-weight:700; text-align:center; min-height:34px; margin:6px 0; }
-  #log { font-size:13px; color:#aab4bf; line-height:1.5; max-height:150px; overflow:auto; }
-  #status { font-size:13px; color:#8b97a4; margin:4px 0; }
+  .row { display:flex; gap:8px; align-items:stretch; }
+  .card { background:#1a2027; border-radius:12px; padding:8px 10px; flex:1; text-align:center; }
+  .card span { display:block; font-size:11px; color:#8b97a4; }
+  .card b { font-size:20px; font-variant-numeric:tabular-nums; }
+  canvas { width:100%; display:block; background:#1a2027; border-radius:12px; }
+  #view { aspect-ratio: 4/3; margin:8px 0; }
+  #msg { font-size:24px; font-weight:700; text-align:center; min-height:32px; margin:4px 0; }
+  #sub { font-size:13px; color:#8b97a4; text-align:center; min-height:18px; }
+  #dbg { font-size:12px; color:#8b97a4; line-height:1.5; margin-top:6px; }
+  details { margin-top:8px; font-size:14px; }
+  summary { color:#8b97a4; }
+  label { display:block; margin:10px 0 2px; font-size:13px; color:#aab4bf; }
+  input[type=range] { width:100%; }
+  h1 { font-size:17px; margin:0 0 6px; }
 </style>
 </head>
 <body>
-<h1>⚾ Swing Test</h1>
-<div id="status">Tap Start to enable motion sensors.</div>
-<button id="start">Start sensors</button>
+<h1>⚾ Swing Baseball</h1>
 
-<canvas id="plot" width="600" height="220"></canvas>
-
-<div class="grid">
-  <div class="card"><span>Accel now (m/s²)</span><b id="aNow">–</b></div>
-  <div class="card"><span>Sensor rate (Hz)</span><b id="hz">–</b></div>
-  <div class="card"><span>Last swing peak accel</span><b id="aPeak">–</b></div>
-  <div class="card"><span>Last swing peak spin (°/s)</span><b id="gPeak">–</b></div>
-  <div class="card"><span>Swing duration (ms)</span><b id="dur">–</b></div>
-  <div class="card"><span>Tilt at contact (pitch / roll)</span><b id="tilt">–</b></div>
+<div class="row">
+  <div class="card"><span>Inning</span><b id="inn">1/3</b></div>
+  <div class="card"><span>Outs</span><b id="outs">0</b></div>
+  <div class="card"><span>Count</span><b id="count">0-0</b></div>
+  <div class="card"><span>Runs</span><b id="runs">0</b></div>
+  <div class="card" style="flex:0 0 64px;padding:4px"><canvas id="dia" width="120" height="100" style="background:none"></canvas></div>
 </div>
 
-<div id="result"></div>
-<div id="bar"><div id="fill"></div><div id="mark"></div></div>
-<button id="pitch" class="alt">Throw pitch (arrives in 1.5 s)</button>
-<button id="reset" class="alt">Clear history</button>
-<div id="log"></div>
+<canvas id="view" width="640" height="480"></canvas>
+<div id="msg"></div>
+<div id="sub">Tap a start button to begin.</div>
+
+<div id="startBtns">
+  <button id="startPhone">Start — phone swing (enables motion)</button>
+  <button id="startDesk" class="alt">Start — desktop (click / Space to swing)</button>
+</div>
+<div class="row">
+  <button id="pauseBtn" class="alt" style="display:none">Pause</button>
+  <button id="newBtn" class="alt">New game</button>
+</div>
+
+<canvas id="field" width="640" height="300" style="margin-top:8px"></canvas>
+<div id="dbg"></div>
+
+<details>
+  <summary>Tuning</summary>
+  <label>Contact offset: <span id="offV">0</span> ms (+ = treat swing as later)</label>
+  <input id="off" type="range" min="-150" max="150" step="5" value="0">
+  <label>Level tilt (beta°): <span id="lvlV">0</span> — launch angle = (tilt − level) × 0.8</label>
+  <input id="lvl" type="range" min="-60" max="60" step="1" value="0">
+  <label>Sensor rate: <span id="hz">–</span> Hz</label>
+</details>
 
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const PITCH_MS = 1500;
-  const START_T = 12, END_T = 6;          // accel thresholds (m/s², gravity removed)
-  let running = false, lastEv = 0, rateEMA = 0;
-  let grav = {x:0,y:0,z:0}, haveLinear = false;
-  let mag = 0, gyro = 0, orient = {beta:0,gamma:0};
-  let swing = null, cooldownUntil = 0, pitchAt = 0, wakeLock = null;
-  const plot = [], PLOT_N = 300;
-  let history = [];
-  try { history = JSON.parse(localStorage.getItem('swingHistory') || '[]'); } catch(e) {}
+  const rand = (a,b) => a + Math.random()*(b-a);
+  const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+  const INNINGS = 3, GAP_MS = 2000, WINDUP_MS = 800;
 
-  function renderLog() {
-    $('log').innerHTML = history.slice(-12).reverse().map(h =>
-      `${h.t} &nbsp; ${h.accel} m/s² &nbsp; ${h.spin}°/s &nbsp; ${h.timing || ''}`).join('<br>');
+  // ---------- persistence ----------
+  const newGame = () => ({ inning:1, outs:0, balls:0, strikes:0, runs:0, hits:0, hr:0, bases:[0,0,0], over:false, ab:0, bestEV:0 });
+  let G = newGame(), S = { off:0, lvl:0, best:0 };
+  try { const s = JSON.parse(localStorage.getItem('bbState')||'null'); if (s) { G = s.G||G; S = Object.assign(S, s.S||{}); } } catch(e) {}
+  const save = () => { try { localStorage.setItem('bbState', JSON.stringify({G,S})); } catch(e) {} };
+
+  // ---------- pitch types ----------
+  const PITCHES = [
+    { name:'Fastball',  ms:1000, mph:[88,95], bx:0,   w:4 },
+    { name:'Changeup',  ms:1350, mph:[77,82], bx:0,   w:2 },
+    { name:'Slider',    ms:1150, mph:[80,86], bx:60,  w:2 },
+    { name:'Curveball', ms:1500, mph:[72,78], bx:-70, w:2 },
+  ];
+  function pickPitch() {
+    let r = rand(0, PITCHES.reduce((a,p)=>a+p.w,0));
+    for (const p of PITCHES) { if ((r -= p.w) < 0) return p; }
+    return PITCHES[0];
   }
-  function save() { try { localStorage.setItem('swingHistory', JSON.stringify(history.slice(-200))); } catch(e) {} }
-  renderLog();
+  function pickLocation() {            // zone is [-1,1] x [-1,1]
+    if (Math.random() < 0.62) return { x:rand(-0.95,0.95), y:rand(-0.95,0.95) };
+    const a = rand(0, Math.PI*2), r = rand(1.1, 1.6);
+    return { x:Math.cos(a)*r, y:Math.sin(a)*r };
+  }
+  const inZone = l => Math.abs(l.x) <= 1 && Math.abs(l.y) <= 1;
+
+  // ---------- game flow ----------
+  let phase = 'idle';                  // idle | wait | windup | flight | result | over
+  let pitch = null, timers = [], paused = false, sensorsOn = false, deskMode = false;
+  const later = (fn, ms) => { const id = setTimeout(fn, ms); timers.push(id); return id; };
+  const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+
+  function setMsg(t, color) { $('msg').textContent = t; $('msg').style.color = color || '#e8edf2'; }
+  function setSub(t) { $('sub').textContent = t; }
+
+  function render() {
+    $('inn').textContent = `${Math.min(G.inning, INNINGS)}/${INNINGS}`;
+    $('outs').textContent = G.outs;
+    $('count').textContent = `${G.balls}-${G.strikes}`;
+    $('runs').textContent = G.runs;
+    drawDiamond();
+  }
+
+  function scheduleNextPitch(gap) {
+    if (G.over) { endGame(); return; }
+    phase = 'wait';
+    later(() => {
+      if (paused) { phase = 'idle'; return; }
+      phase = 'windup'; setMsg('Get ready…'); setSub('');
+      if (navigator.vibrate) navigator.vibrate(15);
+      later(throwPitch, WINDUP_MS);
+    }, gap);
+  }
+
+  function throwPitch() {
+    const type = pickPitch(), loc = pickLocation();
+    const now = performance.now();
+    pitch = { type, loc, strike:inZone(loc), t0:now, at:now + type.ms, mph:Math.round(rand(type.mph[0], type.mph[1])), resolved:false };
+    phase = 'flight'; setMsg('');
+    setSub(`${type.name} ${pitch.mph} mph`);
+    // if no swing is in progress shortly after arrival, it's a take
+    later(() => { if (pitch && !pitch.resolved && !swing) resolveTake(); }, type.ms + 260);
+    later(() => { if (pitch && !pitch.resolved) resolveTake(); }, type.ms + 900);   // safety net
+  }
+
+  function resolveTake() {
+    const p = pitch; p.resolved = true;
+    if (p.strike) { setMsg('Called strike', '#ffb340'); addStrike(false); }
+    else { setMsg('Ball', '#8bb8ff'); addBall(); }
+    finishPitch();
+  }
+
+  function addStrike(foul) {
+    if (foul && G.strikes >= 2) return;
+    G.strikes++;
+    if (G.strikes >= 3) { setMsg('STRIKEOUT', '#ff6b6b'); addOut(); }
+  }
+  function addBall() {
+    G.balls++;
+    if (G.balls >= 4) {
+      setMsg('WALK', '#3ddc84');
+      const b = G.bases;
+      if (b[0]) { if (b[1]) { if (b[2]) G.runs++; b[2] = 1; } b[1] = 1; }
+      b[0] = 1; resetCount();
+    }
+  }
+  function resetCount() { G.balls = 0; G.strikes = 0; }
+  function addOut() {
+    G.outs++; resetCount();
+    if (G.outs >= 3) {
+      G.outs = 0; G.bases = [0,0,0]; G.inning++;
+      if (G.inning > INNINGS) G.over = true;
+    }
+  }
+  function advance(n) {                 // n = bases for batter (4 = HR)
+    const nb = [0,0,0];
+    G.bases.forEach((on, i) => { if (on) { const j = i + n; if (j >= 3) G.runs++; else nb[j] = 1; } });
+    if (n >= 4) G.runs++; else nb[n-1] = 1;
+    G.bases = nb; resetCount();
+  }
+
+  function finishPitch() {
+    save(); render();
+    pitch.resolved = true;
+    phase = 'result';
+    scheduleNextPitch(GAP_MS);
+  }
+
+  function endGame() {
+    phase = 'over';
+    if (G.runs > S.best) S.best = G.runs;
+    save();
+    setMsg(`Game over: ${G.runs} run${G.runs===1?'':'s'}`, '#3ddc84');
+    setSub(`${G.hits} hits, ${G.hr} HR, best exit velo ${G.bestEV} mph. Best game: ${S.best} runs.`);
+    $('pauseBtn').style.display = 'none';
+  }
+
+  // ---------- swing -> batted ball ----------
+  function resolveSwing(sw) {
+    const p = pitch; p.resolved = true;
+    const d = Math.round(sw.peakT + S.off - p.at);         // ms; negative = early
+    const chase = p.strike ? 0 : clamp((Math.max(Math.abs(p.loc.x), Math.abs(p.loc.y)) - 1) / 0.6, 0, 1);
+    const ad = Math.abs(d);
+    let q = ad <= 35 ? 1 : ad <= 70 ? 0.8 : ad <= 120 ? 0.55 : ad <= 180 ? 0.3 : 0;
+    q *= (1 - 0.45*chase);
+
+    // bat speed 0..1.2 from spin + accel
+    const sp = clamp((sw.gpeak - 400) / 700, 0, 1.2), ac = clamp((sw.peak - 25) / 50, 0, 1.2);
+    const bat = 0.6*sp + 0.4*ac;
+
+    const dbg = `timing ${d>0?'+':''}${d} ms · bat ${bat.toFixed(2)} · tilt ${Math.round(sw.beta)}°`;
+    if (ad > 180 || (chase > 0.5 && Math.random() < 0.5)) {
+      setMsg(d < 0 ? 'Swing and a miss (early)' : 'Swing and a miss (late)', '#ffb340');
+      $('dbg').textContent = dbg;
+      addStrike(false); finishPitch(); return;
+    }
+    if (q <= 0.3 && Math.random() < 0.7) {                 // weak contact -> foul
+      setMsg('Foul ball', '#ffb340'); $('dbg').textContent = dbg;
+      addStrike(true); finishPitch(); return;
+    }
+
+    const ev = Math.round((40 + 62*bat) * (0.55 + 0.45*q) + (p.mph - 80) * 0.15);
+    const la = clamp((sw.beta - S.lvl) * 0.8 + rand(-5,5), -25, 75);
+    const spray = clamp(d * 0.35 + rand(-7,7), -70, 70);   // negative = pull side (left, righty)
+    const out = classifyHit(ev, la, spray, p);
+    G.bestEV = Math.max(G.bestEV, ev);
+    $('dbg').textContent = `${dbg} · exit ${ev} mph · launch ${Math.round(la)}° · spray ${Math.round(spray)}° · ${out.dist} ft`;
+    drawField(spray, out.dist, out.kind);
+
+    if (out.kind === 'foul') { setMsg('Foul ball', '#ffb340'); addStrike(true); }
+    else if (out.kind === 'out') { setMsg(out.text, '#ff6b6b'); outCase(out); }
+    else {
+      G.hits++;
+      if (out.bases === 4) G.hr++;
+      advance(out.bases);
+      setMsg(out.text, '#3ddc84');
+    }
+    setSub(`${p.type.name} ${p.mph} mph · ${ev} mph exit velo`);
+    finishPitch();
+  }
+
+  function outCase(o) {
+    const g = o.gb && G.bases[0] && G.outs < 2 && Math.random() < 0.3;
+    if (g) { setMsg('Double play', '#ff6b6b'); G.bases[0] = 0; addOut(); if (!G.over && G.outs !== 0) addOut(); return; }
+    if (!o.gb && G.bases[2] && G.outs < 2 && o.dist > 200) { G.bases[2] = 0; G.runs++; setMsg('Sacrifice fly', '#3ddc84'); }
+    addOut();
+  }
+
+  function classifyHit(ev, la, spray, p) {
+    const dist = Math.round(Math.pow(ev*0.447, 2) * Math.sin(2*clamp(la,0,90)*Math.PI/180) / 9.8 * 0.72 * 3.28);
+    if (Math.abs(spray) > 45) return { kind:'foul', dist };
+    const fence = 375 - 55 * Math.abs(spray)/45;
+    if (la < 10) {                                       // ground ball / low liner
+      const pr = clamp(0.12 + 0.5*(ev-55)/45, 0.08, 0.6);
+      const gd = Math.round(120 + ev*0.9);
+      if (Math.random() < pr) return { kind:'hit', bases:1, text:'Ground ball single', dist:gd };
+      return { kind:'out', gb:true, text:'Groundout', dist:gd };
+    }
+    if (la < 25) {                                       // line drive
+      if (dist >= fence && la > 15) return { kind:'hit', bases:4, text:'HOME RUN', dist };
+      if (Math.random() < 0.72) return Math.random() < 0.28 && ev > 92
+        ? { kind:'hit', bases:2, text:'Double', dist } : { kind:'hit', bases:1, text:'Line drive single', dist };
+      return { kind:'out', text:'Lineout', dist };
+    }
+    if (la < 52) {                                       // fly ball
+      if (dist >= fence) return { kind:'hit', bases:4, text:'HOME RUN', dist };
+      if (dist > 190 && Math.random() < 0.4) return { kind:'hit', bases:Math.random()<0.4?2:1, text:'Fly ball falls in', dist };
+      return { kind:'out', text:'Flyout', dist };
+    }
+    return { kind:'out', text:'Popup', dist: Math.round(dist*0.5) };
+  }
+
+  // ---------- sensors / swing detection ----------
+  const START_T = 12, END_T = 6;
+  let lastEv = 0, rateEMA = 0, grav = {x:0,y:0,z:0}, mag = 0, gyro = 0, orient = {beta:0,gamma:0};
+  let swing = null, cooldownUntil = 0, wakeLock = null;
 
   function onMotion(e) {
     const now = performance.now();
     if (lastEv) { const dt = now - lastEv; if (dt > 0) rateEMA = rateEMA ? rateEMA*0.95 + (1000/dt)*0.05 : 1000/dt; }
     lastEv = now;
-
-    // linear acceleration (gravity removed)
     let ax, ay, az;
     const a = e.acceleration;
-    if (a && a.x !== null && a.x !== undefined) { haveLinear = true; ax=a.x; ay=a.y; az=a.z; }
+    if (a && a.x !== null && a.x !== undefined) { ax=a.x; ay=a.y; az=a.z; }
     else if (e.accelerationIncludingGravity) {
       const g = e.accelerationIncludingGravity, k = 0.9;
       grav.x = k*grav.x + (1-k)*g.x; grav.y = k*grav.y + (1-k)*g.y; grav.z = k*grav.z + (1-k)*g.z;
       ax=g.x-grav.x; ay=g.y-grav.y; az=g.z-grav.z;
     } else return;
     mag = Math.hypot(ax, ay, az);
-
     const r = e.rotationRate;
     gyro = r ? Math.hypot(r.alpha||0, r.beta||0, r.gamma||0) : 0;
 
-    // swing state machine
     if (!swing && mag > START_T && now > cooldownUntil) {
-      swing = { t0: now, peak: mag, peakT: now, gpeak: gyro, tilt: {...orient}, lastHigh: now };
+      swing = { t0:now, peak:mag, peakT:now, gpeak:gyro, beta:orient.beta, lastHigh:now };
     } else if (swing) {
-      if (mag > swing.peak) { swing.peak = mag; swing.peakT = now; swing.tilt = {...orient}; }
+      if (mag > swing.peak) { swing.peak = mag; swing.peakT = now; swing.beta = orient.beta; }
       if (gyro > swing.gpeak) swing.gpeak = gyro;
       if (mag > END_T) swing.lastHigh = now;
       if (now - swing.lastHigh > 80 || now - swing.t0 > 600) finishSwing(now);
     }
-
-    plot.push(mag); if (plot.length > PLOT_N) plot.shift();
   }
+  function onOrient(e) { orient.beta = e.beta || 0; orient.gamma = e.gamma || 0; }
 
   function finishSwing(now) {
     const s = swing; swing = null; cooldownUntil = now + 700;
-    $('aPeak').textContent = s.peak.toFixed(1);
-    $('gPeak').textContent = Math.round(s.gpeak);
-    $('dur').textContent = Math.round(s.lastHigh - s.t0);
-    $('tilt').textContent = `${Math.round(s.tilt.beta)}° / ${Math.round(s.tilt.gamma)}°`;
-    let timing = '';
-    if (pitchAt) {
-      const d = Math.round(s.peakT - pitchAt);
-      const label = Math.abs(d) <= 40 ? 'PERFECT' : d < 0 ? 'EARLY' : 'LATE';
-      timing = `${label} ${d > 0 ? '+' : ''}${d} ms`;
-      $('result').textContent = timing;
-      $('result').style.color = label === 'PERFECT' ? '#3ddc84' : '#ffb340';
-      pitchAt = 0;
-    } else {
-      $('result').textContent = `Swing! ${s.peak.toFixed(0)} m/s²`;
-      $('result').style.color = '#e8edf2';
-    }
-    history.push({ t: new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}),
-                   accel: s.peak.toFixed(1), spin: Math.round(s.gpeak), timing });
-    save(); renderLog();
-    if (navigator.vibrate) navigator.vibrate(30);
+    if (navigator.vibrate) navigator.vibrate(25);
+    handleSwing(s);
+  }
+  function handleSwing(s) {
+    if (paused) return;
+    // only swings that overlap a live pitch count; anything else is a practice swing
+    if (phase === 'flight' && pitch && !pitch.resolved && s.peakT > pitch.t0 + 150) resolveSwing(s);
+    else if (phase !== 'result' && phase !== 'over') setSub(`Practice swing — ${Math.round(s.gpeak)}°/s`);
   }
 
-  function onOrient(e) { orient.beta = e.beta || 0; orient.gamma = e.gamma || 0; }
+  // desktop synthetic swing
+  function deskSwing() {
+    if (!deskMode) return;
+    handleSwing({ peakT:performance.now(), peak:rand(45,70), gpeak:rand(700,1050), beta:rand(10,35) });
+  }
 
-  async function start() {
-    try {
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        const p = await DeviceMotionEvent.requestPermission();
-        if (p !== 'granted') { $('status').textContent = 'Motion permission denied.'; return; }
-        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-          try { await DeviceOrientationEvent.requestPermission(); } catch(e) {}
+  // ---------- start / pause / new ----------
+  async function begin(mode) {
+    if (mode === 'phone') {
+      try {
+        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+          const p = await DeviceMotionEvent.requestPermission();
+          if (p !== 'granted') { setSub('Motion permission denied.'); return; }
+          if (typeof DeviceOrientationEvent.requestPermission === 'function') { try { await DeviceOrientationEvent.requestPermission(); } catch(e) {} }
         }
+      } catch (err) { setSub('Permission error: ' + err); return; }
+      if (!sensorsOn) {
+        window.addEventListener('devicemotion', onMotion);
+        window.addEventListener('deviceorientation', onOrient);
+        sensorsOn = true;
       }
-    } catch (err) { $('status').textContent = 'Permission error: ' + err; return; }
-    window.addEventListener('devicemotion', onMotion);
-    window.addEventListener('deviceorientation', onOrient);
-    running = true;
-    $('start').style.display = 'none';
-    $('status').textContent = 'Listening. Swing the phone (use a wrist strap!). Try "Throw pitch" for timing.';
-    try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {}
-    setTimeout(() => { if (!lastEv) $('status').textContent = 'No sensor data yet. Not on HTTPS, or sensors blocked here.'; }, 2000);
+      try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {}
+      setTimeout(() => { if (!lastEv) setSub('No sensor data. Needs HTTPS and a phone with motion sensors.'); }, 2500);
+    } else { deskMode = true; }
+    $('startBtns').style.display = 'none';
+    $('pauseBtn').style.display = 'block';
+    if (G.over) G = newGame();
+    render(); setMsg('Play ball!');
+    clearTimers(); scheduleNextPitch(1200);
   }
+
+  $('startPhone').onclick = () => begin('phone');
+  $('startDesk').onclick = () => begin('desk');
+  $('pauseBtn').onclick = () => {
+    paused = !paused;
+    $('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
+    if (paused) { clearTimers(); setMsg('Paused'); phase = 'idle'; pitch = null; }
+    else { setMsg(''); scheduleNextPitch(800); }
+  };
+  $('newBtn').onclick = () => {
+    clearTimers(); paused = false; pitch = null; G = newGame(); save(); render();
+    $('pauseBtn').textContent = 'Pause'; $('dbg').textContent = ''; drawField(null);
+    if (sensorsOn || deskMode) { $('pauseBtn').style.display = 'block'; setMsg('Play ball!'); scheduleNextPitch(1200); }
+    else { setMsg(''); setSub('Tap a start button to begin.'); }
+  };
+  document.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); deskSwing(); } });
+  $('view').addEventListener('click', () => { if (deskMode && !sensorsOn) deskSwing(); });
   document.addEventListener('visibilitychange', async () => {
-    if (running && document.visibilityState === 'visible' && navigator.wakeLock) {
-      try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {}
-    }
+    if (document.visibilityState === 'visible' && sensorsOn && navigator.wakeLock) { try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e) {} }
   });
 
-  $('start').onclick = start;
-  $('reset').onclick = () => { history = []; save(); renderLog(); $('result').textContent = ''; };
-  $('pitch').onclick = () => {
-    pitchAt = performance.now() + PITCH_MS; $('result').textContent = '…'; $('result').style.color = '#e8edf2';
-    const t0 = performance.now(), fill = $('fill');
-    (function step() {
-      const f = Math.min(1, (performance.now() - t0) / PITCH_MS);
-      fill.style.width = (f*100) + '%';
-      if (f < 1) requestAnimationFrame(step); else setTimeout(() => { fill.style.width = 0; }, 400);
-    })();
-    setTimeout(() => { if (pitchAt && performance.now() > pitchAt + 800) { pitchAt = 0; $('result').textContent = 'Took a strike'; } }, PITCH_MS + 900);
-  };
+  // ---------- tuning ----------
+  $('off').value = S.off; $('offV').textContent = S.off;
+  $('lvl').value = S.lvl; $('lvlV').textContent = S.lvl;
+  $('off').oninput = e => { S.off = +e.target.value; $('offV').textContent = S.off; save(); };
+  $('lvl').oninput = e => { S.lvl = +e.target.value; $('lvlV').textContent = S.lvl; save(); };
 
-  // plot + readouts
-  const cv = $('plot'), ctx = cv.getContext('2d');
-  function draw() {
-    ctx.clearRect(0,0,cv.width,cv.height);
-    const maxV = 40, h = cv.height, w = cv.width;
-    ctx.strokeStyle = '#33404c'; ctx.beginPath();
-    const ty = h - (START_T/maxV)*h; ctx.moveTo(0,ty); ctx.lineTo(w,ty); ctx.stroke();
-    ctx.strokeStyle = '#3ddc84'; ctx.lineWidth = 2; ctx.beginPath();
-    plot.forEach((v,i) => { const x = i/PLOT_N*w, y = h - Math.min(v,maxV)/maxV*h; i ? ctx.lineTo(x,y) : ctx.moveTo(x,y); });
-    ctx.stroke();
-    $('aNow').textContent = mag.toFixed(1);
-    $('hz').textContent = rateEMA ? Math.round(rateEMA) : '–';
-    requestAnimationFrame(draw);
+  // ---------- drawing ----------
+  const vc = $('view'), vx = vc.getContext('2d');
+  function drawView() {
+    const W = vc.width, H = vc.height, zw = 170, zh = 210, cx = W/2, cy = H*0.68;
+    vx.clearRect(0,0,W,H);
+    // sky/grass
+    vx.fillStyle = '#17301f'; vx.fillRect(0, H*0.38, W, H*0.62);
+    // strike zone
+    vx.strokeStyle = 'rgba(255,255,255,0.5)'; vx.lineWidth = 2;
+    vx.strokeRect(cx - zw/2, cy - zh/2, zw, zh);
+    // plate
+    vx.fillStyle = '#ddd'; vx.beginPath();
+    vx.moveTo(cx-60, cy+zh/2+22); vx.lineTo(cx+60, cy+zh/2+22); vx.lineTo(cx+60, cy+zh/2+34);
+    vx.lineTo(cx, cy+zh/2+50); vx.lineTo(cx-60, cy+zh/2+34); vx.fill();
+    if (phase === 'flight' && pitch) {
+      const now = performance.now();
+      const p = clamp((now - pitch.t0) / pitch.type.ms, 0, 1.25);
+      const x0 = cx, y0 = H*0.30;
+      const tx = cx + pitch.loc.x * zw/2, ty = cy + pitch.loc.y * zh/2;
+      const q = Math.min(p, 1.25), lin = Math.min(p,1);
+      const e = Math.pow(lin, 1.7);
+      const x = x0 + (tx - x0)*e + pitch.type.bx * (1-lin) * lin * 1.2;
+      const y = y0 + (ty - y0)*e;
+      const r = 5 + 24*Math.pow(q, 2.2);
+      vx.fillStyle = '#f4f4f4'; vx.beginPath(); vx.arc(x, y, r, 0, 7); vx.fill();
+      vx.strokeStyle = '#d33'; vx.lineWidth = 1.5; vx.beginPath(); vx.arc(x, y, r*0.7, 0.4, 1.9); vx.stroke();
+    }
+    requestAnimationFrame(drawView);
   }
-  draw();
+
+  const dc = $('dia'), dx = dc.getContext('2d');
+  function drawDiamond() {
+    dx.clearRect(0,0,120,100);
+    const pts = [[88,50],[60,22],[32,50]];       // 1st, 2nd, 3rd
+    pts.forEach((p,i) => {
+      dx.save(); dx.translate(p[0],p[1]); dx.rotate(Math.PI/4);
+      dx.fillStyle = G.bases[i] ? '#ffd24a' : '#2a323b'; dx.fillRect(-9,-9,18,18); dx.restore();
+    });
+    dx.save(); dx.translate(60,78); dx.rotate(Math.PI/4); dx.fillStyle = '#556'; dx.fillRect(-7,-7,14,14); dx.restore();
+  }
+
+  const fc = $('field'), fx = fc.getContext('2d');
+  function drawField(spray, dist, kind) {
+    const W = fc.width, H = fc.height, hx = W/2, hy = H - 14, sc = (H - 30) / 420;
+    fx.clearRect(0,0,W,H);
+    fx.strokeStyle = '#33404c'; fx.lineWidth = 2;
+    fx.beginPath(); fx.moveTo(hx, hy); fx.lineTo(hx - Math.sin(Math.PI/4)*420*sc, hy - Math.cos(Math.PI/4)*420*sc);
+    fx.moveTo(hx, hy); fx.lineTo(hx + Math.sin(Math.PI/4)*420*sc, hy - Math.cos(Math.PI/4)*420*sc); fx.stroke();
+    fx.strokeStyle = '#4a5a6a'; fx.beginPath();
+    for (let a = -45; a <= 45; a += 3) {
+      const r = (375 - 55*Math.abs(a)/45) * sc, rad = a*Math.PI/180;
+      const x = hx + Math.sin(rad)*r, y = hy - Math.cos(rad)*r;
+      a === -45 ? fx.moveTo(x,y) : fx.lineTo(x,y);
+    }
+    fx.stroke();
+    if (spray === null || spray === undefined) return;
+    const rad = spray*Math.PI/180, r = Math.min(dist, 460)*sc;
+    fx.fillStyle = kind === 'hit' ? '#3ddc84' : kind === 'foul' ? '#ffb340' : '#ff6b6b';
+    fx.beginPath(); fx.arc(hx + Math.sin(rad)*r, hy - Math.cos(rad)*r, 7, 0, 7); fx.fill();
+  }
+
+  setInterval(() => { $('hz').textContent = rateEMA ? Math.round(rateEMA) : '–'; }, 500);
+
+  render(); drawField(null); drawView();
+  if (G.over) { setMsg('Last game finished'); setSub(`${G.runs} runs. Tap a start button for a new game.`); }
+  else if (G.inning > 1 || G.outs || G.runs) setSub('Game in progress — tap a start button to continue.');
+  window.__bb = { G: () => G, S: () => S, phase: () => phase, pitch: () => pitch, resolveSwing, classifyHit };   // handy for testing
 })();
 </script>
 </body>
