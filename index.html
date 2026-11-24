@@ -65,6 +65,17 @@
 </details>
 
 <details>
+  <summary>Sound &amp; suspense</summary>
+  <label><input type="checkbox" id="sndOn"> Sound effects</label>
+  <label>Volume: <span id="volV">50</span>% (hard-capped by a limiter)</label>
+  <input id="vol" type="range" min="0" max="80" step="5" value="50">
+  <label><input type="checkbox" id="crowdOn"> Crowd cheers on the phone</label>
+  <label><input type="checkbox" id="holdOn"> Suspense: hold the outcome of balls in play</label>
+  <label><input type="checkbox" id="deskRev"> Claude mode: wait for the desktop reveal (up to 10 s)</label>
+  <button id="sndTest" class="alt">Test sounds</button>
+</details>
+
+<details>
   <summary>Tuning</summary>
   <label>Contact offset: <span id="offV">0</span> ms (+ = treat swing as later)</label>
   <input id="off" type="range" min="-150" max="150" step="5" value="0">
@@ -82,7 +93,7 @@
 
   // ---------- persistence ----------
   const newGame = () => ({ inning:1, outs:0, balls:0, strikes:0, runs:0, hits:0, hr:0, bases:[0,0,0], over:false, ab:0, bestEV:0, innStart:0 });
-  let G = newGame(), S = { off:0, lvl:0, best:0 };
+  let G = newGame(), S = { off:0, lvl:0, best:0, vol:50, snd:true, crowd:false, hold:true, deskRev:false };
   try { const s = JSON.parse(localStorage.getItem('bbState')||'null'); if (s) { G = s.G||G; S = Object.assign(S, s.S||{}); } } catch(e) {}
   const save = () => { try { localStorage.setItem('bbState', JSON.stringify({G,S})); } catch(e) {} };
 
@@ -114,10 +125,16 @@
   // Claude mode: pitches requested through a secret gist (see "Claude link" section below)
   let claudeMode = false, awaiting = false, pendingSpec = null, evts = [], lastSwing = null;
 
-  function setMsg(t, color) { $('msg').textContent = t; $('msg').style.color = color || '#e8edf2'; if (t) evts.push(t); }
-  function setSub(t) { $('sub').textContent = t; }
+  // While a ball in play is being "held" for suspense, text/scoreboard/field output is buffered until endHold().
+  let holding = false, holdMs = 0, revealTimer = null, held = {}, lastRes = null;
+  function paintMsg(t, color) { $('msg').textContent = t; $('msg').style.color = color || '#e8edf2'; }
+  function paintSub(t) { $('sub').textContent = t; }
+  function setMsg(t, color) { if (t) evts.push(t); if (holding) { held.msg = [t, color]; return; } paintMsg(t, color); }
+  function setSub(t) { if (holding) { held.sub = t; return; } paintSub(t); }
+  function setDbg(t) { if (holding) { held.dbg = t; return; } $('dbg').textContent = t; }
 
   function render() {
+    if (holding) return;
     $('inn').textContent = `${Math.min(G.inning, INNINGS)}/${INNINGS}`;
     $('outs').textContent = G.outs;
     $('count').textContent = `${G.balls}-${G.strikes}`;
@@ -131,6 +148,7 @@
     if (splash) {                       // "next inning" splash after the result has had a moment to read
       const s = splash; splash = null;
       later(() => {
+        SFX.play('inning');
         setMsg(`End of inning ${s.n}`, '#8bb8ff');
         setSub(`${s.runs} run${s.runs === 1 ? '' : 's'} this inning · up next: inning ${s.n + 1}/${INNINGS}`);
       }, 1200);
@@ -147,6 +165,7 @@
     awaiting = false;
     phase = 'windup'; setMsg('Get ready…'); setSub('');
     if (navigator.vibrate) navigator.vibrate(15);
+    SFX.play('windup');
     later(() => throwPitch(spec), WINDUP_MS);
   }
   function tryRequested() {
@@ -161,6 +180,8 @@
     const mph = isFinite(spec.mph) ? clamp(Math.round(+spec.mph), 60, 105) : Math.round(rand(type.mph[0], type.mph[1]));
     pitch = { type, loc, strike:inZone(loc), t0:now, at:now + type.ms, mph, resolved:false, reqId:spec.id || 0, spec };
     evts = []; lastSwing = null;
+    const mine = pitch;
+    later(() => { if (pitch === mine && !mine.resolved && !swing) SFX.play('mitt'); }, type.ms);   // catcher's mitt on a take
     phase = 'flight'; setMsg('');
     setSub(`${type.name} ${pitch.mph} mph`);
     // if no swing is in progress shortly after arrival, it's a take
@@ -170,15 +191,15 @@
 
   function resolveTake() {
     const p = pitch; p.resolved = true;
-    if (p.strike) { setMsg('Called strike', '#ffb340'); addStrike(false); }
-    else { setMsg('Ball', '#8bb8ff'); addBall(); }
+    if (p.strike) { setMsg('Called strike', '#ffb340'); SFX.play('ump_strike'); addStrike(false); }
+    else { setMsg('Ball', '#8bb8ff'); SFX.play('ump_ball'); addBall(); }
     finishPitch();
   }
 
   function addStrike(foul) {
     if (foul && G.strikes >= 2) return;
     G.strikes++;
-    if (G.strikes >= 3) { setMsg('STRIKEOUT', '#ff6b6b'); addOut(); }
+    if (G.strikes >= 3) { setMsg('STRIKEOUT', '#ff6b6b'); SFX.play('ump_out'); addOut(); }
   }
   function addBall() {
     G.balls++;
@@ -211,7 +232,33 @@
     pitch.resolved = true;
     if (claudeMode && pitch.reqId) reportResult();
     phase = 'result';
-    scheduleNextPitch(GAP_MS);
+    if (holding) revealTimer = setTimeout(() => endHold(false), holdMs);
+    else scheduleNextPitch(GAP_MS);
+  }
+
+  // ---- suspense hold for balls in play ----
+  function beginHold(out) {
+    holding = true; held = { out };
+    holdMs = (claudeMode && S.deskRev) ? 10000 : clamp(1100 + Math.min(out.dist, 450) * 3, 1200, 2600);
+    paintMsg('In play…', '#8bb8ff'); paintSub('');
+  }
+  function endHold(silent) {
+    if (!holding) return;
+    holding = false; clearTimeout(revealTimer); revealTimer = null;
+    render();
+    if (!silent) {
+      if (held.ball) drawField(...held.ball);
+      if (held.dbg != null) $('dbg').textContent = held.dbg;
+      if (held.msg) paintMsg(...held.msg);
+      if (held.sub != null) paintSub(held.sub);
+      const o = held.out || {};
+      if (o.kind === 'out') SFX.play('catch');
+      else if (o.kind === 'hit' && o.bases === 4) SFX.play('cheer', { crowd:true });
+    }
+    held = {};
+    if (claudeMode && pitch && pitch.reqId && lastRes && lastRes.id === pitch.reqId && lastRes.hold)
+      queueWrite(Object.assign({}, lastRes, { hold:false, revealed:true, ts:Date.now() }));
+    if (!silent) scheduleNextPitch(GAP_MS);
   }
 
   function endGame() {
@@ -240,11 +287,11 @@
     lastSwing = { timing:d, bat:+bat.toFixed(2) };
     if (ad > 130 || (chase > 0.4 && Math.random() < 0.6)) {
       setMsg(d < 0 ? 'Swing and a miss (early)' : 'Swing and a miss (late)', '#ffb340');
-      $('dbg').textContent = dbg;
+      setDbg(dbg); SFX.play('whiff'); later(() => SFX.play('mitt', { gain:0.8 }), 150);
       addStrike(false); finishPitch(); return;
     }
     if (q <= 0.3 && Math.random() < 0.7) {                 // weak contact -> foul
-      setMsg('Foul ball', '#ffb340'); $('dbg').textContent = dbg;
+      setMsg('Foul ball', '#ffb340'); setDbg(dbg); SFX.play('foul');
       addStrike(true); finishPitch(); return;
     }
 
@@ -254,7 +301,9 @@
     const out = classifyHit(ev, la, spray, p);
     G.bestEV = Math.max(G.bestEV, ev);
     Object.assign(lastSwing, { ev, la:Math.round(la), spray:Math.round(spray), dist:out.dist });
-    $('dbg').textContent = `${dbg} · exit ${ev} mph · launch ${Math.round(la)}° · spray ${Math.round(spray)}° · ${out.dist} ft`;
+    SFX.play(out.kind === 'foul' ? 'foul' : ev >= 100 ? 'crack_barrel' : ev >= 85 ? 'crack_solid' : 'crack_weak');
+    if (out.kind !== 'foul' && S.hold) beginHold(out);
+    setDbg(`${dbg} · exit ${ev} mph · launch ${Math.round(la)}° · spray ${Math.round(spray)}° · ${out.dist} ft`);
     drawField(spray, out.dist, out.kind, la);
 
     if (out.kind === 'foul') { setMsg('Foul ball', '#ffb340'); addStrike(true); }
@@ -352,6 +401,7 @@
 
   // ---------- start / pause / new ----------
   async function begin(mode) {
+    SFX.init();
     if (mode === 'claude' && !TOKEN) { setSub('Open “Claude link” below and paste your token first.'); $('linkBox').open = true; return; }
     claudeMode = (mode === 'claude');
     if (mode === 'phone' || mode === 'claude') {
@@ -384,11 +434,11 @@
   $('pauseBtn').onclick = () => {
     paused = !paused;
     $('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
-    if (paused) { requeueUnresolved(); clearTimers(); setMsg('Paused'); phase = 'idle'; pitch = null; awaiting = false; }
+    if (paused) { endHold(true); requeueUnresolved(); clearTimers(); setMsg('Paused'); phase = 'idle'; pitch = null; awaiting = false; }
     else { setMsg(''); scheduleNextPitch(800); }
   };
   $('newBtn').onclick = () => {
-    requeueUnresolved(); clearTimers(); paused = false; pitch = null; awaiting = false; G = newGame(); save(); render();
+    endHold(true); requeueUnresolved(); clearTimers(); paused = false; pitch = null; awaiting = false; G = newGame(); save(); render();
     $('pauseBtn').textContent = 'Pause'; $('dbg').textContent = ''; drawField(null);
     if (sensorsOn || deskMode) { $('pauseBtn').style.display = 'block'; setMsg('Play ball!'); scheduleNextPitch(1200); }
     else { setMsg(''); setSub('Tap a start button to begin.'); }
@@ -422,6 +472,8 @@
       const res = JSON.parse((f['result.json'] || {}).content || '{}');
       lastResultId = Math.max(lastResultId, res.id || 0);
       linkSt('connected');
+      const rev = JSON.parse((f['reveal.json'] || {}).content || '{}');   // written by the desktop sim when its replay ends
+      if (holding && S.deskRev && rev.id && pitch && rev.id === pitch.reqId) endHold(false);
       const seen = Math.max(S.lastReq || 0, lastResultId, pendingSpec ? pendingSpec.id : 0, pitch && pitch.reqId || 0);
       if (req.id && req.id > seen) { pendingSpec = req; S.lastReq = req.id; save(); tryRequested(); }
     } catch (e) { linkSt('offline'); }
@@ -437,6 +489,8 @@
     return { inning:Math.min(G.inning, INNINGS), innings:INNINGS, outs:G.outs, balls:G.balls, strikes:G.strikes,
              runs:G.runs, bases:G.bases.slice(), over:G.over, hits:G.hits, hr:G.hr };
   }
+  let wq = Promise.resolve();
+  const queueWrite = obj => { wq = wq.then(() => writeResult(obj)).catch(() => {}); return wq; };
   async function writeResult(obj) {
     for (let i = 0; i < 3; i++) {
       try {
@@ -448,17 +502,17 @@
     }
     linkSt('write failed'); return false;
   }
-  function postStatus() { writeResult({ id: lastResultId, ready:true, ts:Date.now(), state:stateSnap() }); }
+  function postStatus() { queueWrite({ id: lastResultId, ready:true, ts:Date.now(), state:stateSnap() }); }
   function reportResult() {
     const p = pitch, loc = p.loc;
     const res = {
       id: p.reqId, ts: Date.now(),
       pitch: { type:p.type.name, mph:p.mph, x:+loc.x.toFixed(2), y:+loc.y.toFixed(2), strike:p.strike },
       swung: !!lastSwing, swing: lastSwing || null,
-      events: evts.filter(Boolean).slice(), state: stateSnap(),
+      events: evts.filter(Boolean).slice(), state: stateSnap(), hold: holding,
     };
     lastResultId = Math.max(lastResultId, p.reqId);
-    writeResult(res);
+    lastRes = res; queueWrite(res);
   }
 
   $('tokSave').onclick = async () => {
@@ -471,6 +525,86 @@
     } catch (e) { linkSt('offline'); }
   };
   $('tokClear').onclick = () => { TOKEN = ''; try { localStorage.removeItem('bbToken'); } catch(e) {} stopPolling(); linkSt('no token'); };
+
+  // ---------- sound (Web Audio; synthesized placeholders, real files override by name) ----------
+  // Put files in sfx/ and list them in sfx/manifest.json, e.g. {"crack_solid":"crack_solid.mp3"}.
+  // Names: crack_weak crack_solid crack_barrel whiff mitt foul catch windup inning cheer ump_strike ump_ball ump_out
+  // Everything goes through master gain -> compressor -> soft clipper, so nothing can spike.
+  const SFX = (() => {
+    let ctx = null, master = null, noise = null; const buffers = {}, synth = {};
+    const vol = () => S.snd === false ? 0 : clamp((S.vol || 0) / 100, 0, 0.8);
+    function init() {
+      if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      try { ctx = new AC(); } catch (e) { return; }
+      master = ctx.createGain(); master.gain.value = vol();
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 0; comp.ratio.value = 20; comp.attack.value = 0.002; comp.release.value = 0.12;
+      const clip = ctx.createWaveShaper(), n = 1024, c = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; c[i] = 0.85 * Math.tanh(1.2 * x) / Math.tanh(1.2); }
+      clip.curve = c;
+      master.connect(comp); comp.connect(clip); clip.connect(ctx.destination);
+      noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+      const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      loadFiles();
+    }
+    async function loadFiles() {
+      try {
+        const m = await (await fetch('sfx/manifest.json', { cache:'no-cache' })).json();
+        for (const [name, file] of Object.entries(m)) {
+          try { const ab = await (await fetch('sfx/' + file)).arrayBuffer(); buffers[name] = await ctx.decodeAudioData(ab); } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    const setVol = () => { if (master) master.gain.value = vol(); };
+    const burst = (g, t, o) => {
+      const s = ctx.createBufferSource(); s.buffer = noise; s.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = o.type || 'bandpass'; f.frequency.setValueAtTime(o.freq, t); f.Q.value = o.q || 1;
+      if (o.sweepTo) f.frequency.exponentialRampToValueAtTime(o.sweepTo, t + o.dur);
+      const a = ctx.createGain(), att = o.att || 0.004;
+      a.gain.setValueAtTime(0.0001, t); a.gain.exponentialRampToValueAtTime(o.gain, t + att); a.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+      s.connect(f); f.connect(a); a.connect(g); s.start(t); s.stop(t + o.dur + 0.02);
+    };
+    const tone = (g, t, o) => {
+      const osc = ctx.createOscillator(); osc.type = o.type || 'sine'; osc.frequency.setValueAtTime(o.freq, t);
+      if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, t + o.dur);
+      const a = ctx.createGain(); a.gain.setValueAtTime(o.gain, t); a.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+      osc.connect(a); a.connect(g); osc.start(t); osc.stop(t + o.dur + 0.02);
+    };
+    synth.crack_weak   = (g, t) => { burst(g, t, { dur:.05, freq:1400, q:.8, gain:.5 }); tone(g, t, { freq:150, to:70, dur:.07, gain:.4 }); };
+    synth.crack_solid  = (g, t) => { burst(g, t, { dur:.07, freq:2200, q:.9, gain:.8 }); tone(g, t, { freq:190, to:60, dur:.10, gain:.7 }); };
+    synth.crack_barrel = (g, t) => { burst(g, t, { dur:.09, freq:2600, q:1, gain:1 }); tone(g, t, { freq:210, to:55, dur:.13, gain:.9 }); tone(g, t, { freq:1250, dur:.16, gain:.25 }); };
+    synth.whiff  = (g, t) => burst(g, t, { dur:.22, freq:500, sweepTo:2600, q:1.2, gain:.45 });
+    synth.mitt   = (g, t) => { burst(g, t, { dur:.07, type:'lowpass', freq:900, gain:.9 }); tone(g, t, { freq:140, to:60, dur:.09, gain:.6 }); };
+    synth.foul   = (g, t) => burst(g, t, { dur:.03, freq:3200, q:2, gain:.4 });
+    synth.catch  = (g, t) => burst(g, t, { dur:.12, type:'lowpass', freq:600, gain:.6 });
+    synth.windup = (g, t) => { tone(g, t, { freq:660, dur:.09, gain:.25, type:'triangle' }); tone(g, t + .11, { freq:880, dur:.09, gain:.25, type:'triangle' }); };
+    synth.inning = (g, t) => [523, 659, 784, 1047].forEach((f, i) => tone(g, t + i * .13, { freq:f, dur:.14, gain:.15, type:'square' }));
+    synth.cheer  = (g, t) => burst(g, t, { dur:1.6, freq:1200, q:.4, gain:.5, att:.35 });
+    function play(name, o) {
+      o = o || {};
+      if (!ctx || S.snd === false || (o.crowd && !S.crowd)) return;
+      const g = ctx.createGain(); g.gain.value = o.gain == null ? 1 : o.gain; g.connect(master);
+      if (buffers[name]) { const s = ctx.createBufferSource(); s.buffer = buffers[name]; s.connect(g); s.start(); return; }
+      if (synth[name]) synth[name](g, ctx.currentTime);
+    }
+    function resume() { if (ctx && ctx.state === 'suspended') ctx.resume(); }
+    return { init, play, setVol, resume };
+  })();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') SFX.resume(); });
+
+  $('sndOn').checked = S.snd !== false; $('crowdOn').checked = !!S.crowd; $('holdOn').checked = S.hold !== false; $('deskRev').checked = !!S.deskRev;
+  $('vol').value = S.vol; $('volV').textContent = S.vol;
+  $('sndOn').onchange = e => { S.snd = e.target.checked; SFX.setVol(); save(); };
+  $('crowdOn').onchange = e => { S.crowd = e.target.checked; save(); };
+  $('holdOn').onchange = e => { S.hold = e.target.checked; save(); };
+  $('deskRev').onchange = e => { S.deskRev = e.target.checked; save(); };
+  $('vol').oninput = e => { S.vol = +e.target.value; $('volV').textContent = S.vol; SFX.setVol(); save(); };
+  $('sndTest').onclick = () => {
+    SFX.init();
+    [['crack_weak', 0], ['crack_solid', 450], ['crack_barrel', 900], ['whiff', 1500], ['mitt', 1900], ['foul', 2300], ['catch', 2700], ['windup', 3100], ['inning', 3600], ['cheer', 4300]]
+      .forEach(([n, t]) => setTimeout(() => SFX.play(n, n === 'cheer' ? { crowd:false } : {}), t));
+  };
 
   // ---------- tuning ----------
   $('off').value = S.off; $('offV').textContent = S.off;
@@ -540,6 +674,7 @@
   let ball = null;                                  // {t0,dur,spray,dist,kind,la}
   const FENCE = a => 375 - 55*Math.abs(a)/45;
   function drawField(spray, dist, kind, la) {
+    if (holding && spray !== null && spray !== undefined) { held.ball = [spray, dist, kind, la]; return; }
     ball = (spray === null || spray === undefined) ? null
          : { t0: performance.now(), spray, dist, kind, la: la || 0,
              dur: clamp(600 + Math.min(dist,450)*2.2, 800, 1700) };
@@ -586,7 +721,7 @@
   render(); drawField(null); drawView(); fieldLoop();
   if (G.over) { setMsg('Last game finished'); setSub(`${G.runs} runs. Tap a start button for a new game.`); }
   else if (G.inning > 1 || G.outs || G.runs) setSub('Game in progress — tap a start button to continue.');
-  window.__bb = { G: () => G, S: () => S, phase: () => phase, pitch: () => pitch, resolveSwing, classifyHit };   // handy for testing
+  window.__bb = { holding: () => holding, sfx: SFX, G: () => G, S: () => S, phase: () => phase, pitch: () => pitch, resolveSwing, classifyHit };   // handy for testing
 })();
 </script>
 </body>
