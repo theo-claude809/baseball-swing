@@ -326,7 +326,7 @@
   }
 
   function classifyHit(ev, la, spray, p) {
-    const dist = Math.round(Math.pow(ev*0.447, 2) * Math.sin(2*clamp(la,0,90)*Math.PI/180) / 9.8 * 0.72 * 3.28);
+    const dist = Math.round(Math.pow(ev*0.447, 2) * Math.sin(2*clamp(la,0,90)*Math.PI/180) / 9.8 * Math.max(0.45, 0.84 - 0.0022*ev) * 3.28);  // drag: efficiency falls with exit speed (~400 ft @110 mph, ~530 @128)
     if (Math.abs(spray) > 45) return { kind:'foul', dist };
     const fence = 375 - 55 * Math.abs(spray)/45;
     if (la < 10) {                                       // ground ball / low liner
