@@ -71,7 +71,7 @@
   <input id="vol" type="range" min="0" max="80" step="5" value="50">
   <label><input type="checkbox" id="crowdOn"> Crowd cheers on the phone</label>
   <label><input type="checkbox" id="holdOn"> Suspense: hold the outcome of balls in play</label>
-  <label><input type="checkbox" id="deskRev"> Claude mode: wait for the desktop reveal (up to 10 s)</label>
+  <label><input type="checkbox" id="deskRev"> Claude mode: wait for the desktop reveal (up to 15 s)</label>
   <button id="sndTest" class="alt">Test sounds</button>
 </details>
 
@@ -239,7 +239,7 @@
   // ---- suspense hold for balls in play ----
   function beginHold(out) {
     holding = true; held = { out };
-    holdMs = (claudeMode && S.deskRev) ? 10000 : clamp(1100 + Math.min(out.dist, 450) * 3, 1200, 2600);
+    holdMs = (claudeMode && S.deskRev) ? 15000 : clamp(1100 + Math.min(out.dist, 450) * 3, 1200, 2600);
     paintMsg('In play…', '#8bb8ff'); paintSub('');
   }
   function endHold(silent) {
