@@ -531,7 +531,7 @@
   // Names: crack_weak crack_solid crack_barrel whiff mitt foul catch windup inning cheer ump_strike ump_ball ump_out
   // Everything goes through master gain -> compressor -> soft clipper, so nothing can spike.
   const SFX = (() => {
-    let ctx = null, master = null, noise = null; const buffers = {}, synth = {};
+    let ctx = null, master = null, noise = null; const buffers = {}, gains = {}, synth = {};
     const vol = () => S.snd === false ? 0 : clamp((S.vol || 0) / 100, 0, 0.8);
     function init() {
       if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
@@ -551,8 +551,9 @@
     async function loadFiles() {
       try {
         const m = await (await fetch('sfx/manifest.json', { cache:'no-cache' })).json();
-        for (const [name, file] of Object.entries(m)) {
-          try { const ab = await (await fetch('sfx/' + file)).arrayBuffer(); buffers[name] = await ctx.decodeAudioData(ab); } catch (e) {}
+        for (const [name, v] of Object.entries(m)) {         // value: "file.ogg" or {"file":"file.ogg","gain":2}
+          const file = typeof v === 'string' ? v : v.file;
+          try { const ab = await (await fetch('sfx/' + file)).arrayBuffer(); buffers[name] = await ctx.decodeAudioData(ab); gains[name] = (v && v.gain) || 1; } catch (e) {}
         }
       } catch (e) {}
     }
@@ -584,12 +585,12 @@
     function play(name, o) {
       o = o || {};
       if (!ctx || S.snd === false || (o.crowd && !S.crowd)) return;
-      const g = ctx.createGain(); g.gain.value = o.gain == null ? 1 : o.gain; g.connect(master);
+      const g = ctx.createGain(); g.gain.value = (o.gain == null ? 1 : o.gain) * (buffers[name] ? gains[name] : 1); g.connect(master);
       if (buffers[name]) { const s = ctx.createBufferSource(); s.buffer = buffers[name]; s.connect(g); s.start(); return; }
       if (synth[name]) synth[name](g, ctx.currentTime);
     }
     function resume() { if (ctx && ctx.state === 'suspended') ctx.resume(); }
-    return { init, play, setVol, resume };
+    return { init, play, setVol, resume, loaded: () => Object.keys(buffers) };
   })();
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') SFX.resume(); });
 

@@ -1,1 +1,9 @@
-{}
+{
+  "crack_weak": "crack_weak.ogg",
+  "crack_solid": "crack_solid.ogg",
+  "crack_barrel": "crack_barrel.ogg",
+  "foul": "foul.ogg",
+  "catch": "catch.ogg",
+  "mitt": "mitt.wav",
+  "whiff": { "file": "whiff.wav", "gain": 2.5 }
+}
